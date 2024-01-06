@@ -3,7 +3,7 @@ mod stats;
 use std::{ops::Deref, thread, time::Duration};
 
 use inputbot::{handle_input_events, KeybdKey};
-use sqlx::{migrate::MigrateDatabase, Sqlite, SqlitePool};
+use sqlx::{migrate::MigrateDatabase, QueryBuilder, Sqlite, SqlitePool};
 
 #[tokio::main]
 async fn main() {
@@ -28,17 +28,17 @@ async fn main() {
         loop {
             tokio::time::sleep(Duration::from_secs(20)).await;
 
-            let transaction = db.begin().await.unwrap();
-            for key in stats::get_keypresses().lock().await.deref() {
-                println!("{:?}", key);
-                sqlx::query("INSERT INTO keypresses (timestamp, key) VALUES (?, ?);")
-                    .bind(key.0.timestamp())
-                    .bind(u64::from(key.1) as i64)
-                    .execute(&db)
-                    .await
-                    .unwrap();
-            }
-            transaction.commit().await.unwrap();
+            println!("Committing to database...");
+
+            let mut query_builder: QueryBuilder<Sqlite> =
+                QueryBuilder::new("INSERT INTO keypresses (timestamp, key) ");
+
+            query_builder.push_values(stats::get_keypresses().lock().await.iter(), |mut b, key| {
+                b.push_bind(key.0.timestamp())
+                    .push_bind(u64::from(key.1) as i64);
+            });
+
+            query_builder.build().execute(&db).await.unwrap();
 
             stats::reset_keypresses().await;
         }
@@ -52,5 +52,6 @@ fn register_bindings() {
 }
 
 fn keypress_handler(key: KeybdKey) {
+    // TODO: Make this go through an MPSC channel into another thread so as not to block.
     stats::add_keypress_blocking(key);
 }
