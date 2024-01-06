@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::fmt::Display;
 
 use chrono::{NaiveDate, NaiveDateTime, Utc};
 use inputbot::KeybdKey;
@@ -6,6 +6,19 @@ use inquire::{DateSelect, Select};
 use sqlx::Row;
 
 use crate::db;
+
+struct Keypresses(Vec<(KeybdKey, i64)>);
+
+impl Display for Keypresses {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = String::new();
+        for key in &self.0 {
+            output += &format!("{:?}: {}\n", key.0, key.1);
+        }
+
+        write!(f, "{output}")
+    }
+}
 
 pub async fn query(db_path: &str) {
     let selection = Select::new(
@@ -21,30 +34,25 @@ pub async fn query(db_path: &str) {
     .unwrap();
 
     match selection {
-        "All keypresses" => total_keypresses(db_path).await,
-        "Each keypresses" => each_keypresses(db_path, false).await,
-        "Each keypresses sorted" => each_keypresses(db_path, true).await,
+        "All keypresses" => println!("{}", total_keypresses(db_path).await),
+        "Each keypresses" => println!("{}", each_keypresses(db_path, false).await),
+        "Each keypresses sorted" => println!("{}", each_keypresses(db_path, true).await),
         "Specific keypresses" => specific_keypresses(db_path).await,
         _ => unreachable!(),
     }
 }
 
-async fn total_keypresses(db_path: &str) {
-    let mut db = db::initialize_db(db_path).await;
+async fn total_keypresses(db_path: &str) -> i64 {
+    let keypresses = each_keypresses(db_path, false).await;
+    let mut count = 0;
+    for key in keypresses.0 {
+        count += key.1;
+    }
 
-    let row = sqlx::query("SELECT COUNT(*) as count FROM keypresses;")
-        .fetch_one(&mut db)
-        .await
-        .unwrap();
-    let keypress_count: i64 = row.get(0);
-
-    println!(
-        "{} keys have been pressed. This includes all control keys.",
-        keypress_count
-    );
+    count
 }
 
-async fn each_keypresses(db_path: &str, sort: bool) {
+async fn each_keypresses(db_path: &str, sort: bool) -> Keypresses {
     let mut db = db::initialize_db(db_path).await;
 
     let filters = select_filters();
@@ -55,7 +63,7 @@ async fn each_keypresses(db_path: &str, sort: bool) {
             continue;
         }
 
-        let row = sqlx::query("SELECT COUNT(*), timestamp FROM keypresses WHERE key == ?")
+        let row = sqlx::query("SELECT COUNT(*), timestamp FROM keypresses WHERE key == ?;")
             .bind(i as i64)
             .fetch_one(&mut db)
             .await
@@ -85,12 +93,7 @@ async fn each_keypresses(db_path: &str, sort: bool) {
         keys.sort_by(|a, b| b.1.cmp(&a.1));
     }
 
-    let mut output = String::new();
-    for key in keys {
-        output += &format!("{:?}: {}\n", key.0, key.1);
-    }
-
-    println!("{output}");
+    Keypresses(keys)
 }
 
 async fn specific_keypresses(db_path: &str) {
