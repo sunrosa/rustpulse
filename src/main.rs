@@ -1,9 +1,12 @@
 mod stats;
 
-use std::{ops::Deref, thread, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use inputbot::{handle_input_events, KeybdKey};
-use sqlx::{migrate::MigrateDatabase, QueryBuilder, Sqlite, SqlitePool};
+use sqlx::{
+    migrate::MigrateDatabase, Connection, QueryBuilder, Sqlite, SqliteConnection, SqlitePool,
+};
+use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
@@ -11,6 +14,20 @@ async fn main() {
 
     tokio::task::spawn(async {
         let db_path = "events.db";
+
+        let exit_after_commit = Arc::new(Mutex::new(false));
+
+        {
+            let exit_after_commit_thread = exit_after_commit.clone();
+            tokio::task::spawn(async move {
+                tokio::signal::ctrl_c()
+                    .await
+                    .expect("Error registering ctrl-c handler.");
+
+                println!("Exiting after next database commit...");
+                *exit_after_commit_thread.lock().await = true;
+            });
+        }
 
         if !Sqlite::database_exists(db_path).await.unwrap_or(false) {
             println!("Creating database at {db_path}...");
@@ -22,25 +39,35 @@ async fn main() {
             println!("Database already exists at {db_path}.");
         }
 
-        let db = SqlitePool::connect(db_path).await.unwrap();
-        sqlx::query("CREATE TABLE IF NOT EXISTS keypresses (id INTEGER PRIMARY KEY NOT NULL, timestamp INTEGER NOT NULL, key INTEGER NOT NULL);").execute(&db).await.unwrap();
+        let mut db = SqliteConnection::connect(db_path).await.unwrap();
+        sqlx::query("CREATE TABLE IF NOT EXISTS keypresses (id INTEGER PRIMARY KEY NOT NULL, timestamp INTEGER NOT NULL, key INTEGER NOT NULL);").execute(&mut db).await.unwrap();
 
         loop {
             tokio::time::sleep(Duration::from_secs(20)).await;
 
-            println!("Committing to database...");
+            let keypresses = stats::get_keypresses().lock().await;
+            if keypresses.len() != 0 {
+                println!("Committing to database...");
 
-            let mut query_builder: QueryBuilder<Sqlite> =
-                QueryBuilder::new("INSERT INTO keypresses (timestamp, key) ");
+                let mut query_builder: QueryBuilder<Sqlite> =
+                    QueryBuilder::new("INSERT INTO keypresses (timestamp, key) ");
 
-            query_builder.push_values(stats::get_keypresses().lock().await.iter(), |mut b, key| {
-                b.push_bind(key.0.timestamp())
-                    .push_bind(u64::from(key.1) as i64);
-            });
+                query_builder.push_values(keypresses.iter(), |mut b, key| {
+                    b.push_bind(key.0.timestamp())
+                        .push_bind(u64::from(key.1) as i64);
+                });
 
-            query_builder.build().execute(&db).await.unwrap();
+                query_builder.build().execute(&mut db).await.unwrap();
 
-            stats::reset_keypresses().await;
+                println!("Committed to database.");
+
+                drop(keypresses);
+                stats::reset_keypresses().await;
+            }
+
+            if *exit_after_commit.lock().await {
+                std::process::exit(0);
+            }
         }
     });
 
