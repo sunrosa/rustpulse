@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use inputbot::KeybdKey;
 use inquire::Select;
 use sqlx::Row;
@@ -7,7 +9,12 @@ use crate::db;
 pub async fn query(db_path: &str) {
     let selection = Select::new(
         "Query >",
-        vec!["All keypresses", "Each keypresses", "Specific keypresses"],
+        vec![
+            "All keypresses",
+            "Each keypresses",
+            "Each keypresses sorted",
+            "Specific keypresses",
+        ],
     )
     .prompt()
     .unwrap();
@@ -15,6 +22,7 @@ pub async fn query(db_path: &str) {
     match selection {
         "All keypresses" => total_keypresses(db_path).await,
         "Each keypresses" => each_keypresses(db_path).await,
+        "Each keypresses sorted" => each_keypresses_sorted(db_path).await,
         "Specific keypresses" => specific_keypresses(db_path).await,
         _ => unreachable!(),
     }
@@ -57,10 +65,39 @@ async fn each_keypresses(db_path: &str) {
     println!("{output}");
 }
 
+async fn each_keypresses_sorted(db_path: &str) {
+    let mut db = db::initialize_db(db_path).await;
+
+    let mut keys: Vec<(KeybdKey, i64)> = Vec::new();
+    for i in 0x08..0xBB {
+        if let KeybdKey::OtherKey(_) = KeybdKey::from(i) {
+            continue;
+        }
+
+        let presses: i64 = sqlx::query("SELECT COUNT(*) as count FROM keypresses WHERE key == ?")
+            .bind(i as i64)
+            .fetch_one(&mut db)
+            .await
+            .unwrap()
+            .get(0);
+
+        keys.push((KeybdKey::from(i), presses));
+    }
+
+    keys.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let mut output = String::new();
+    for key in keys {
+        output += &format!("{:?}: {}\n", key.0, key.1);
+    }
+
+    println!("{output}");
+}
+
 async fn specific_keypresses(db_path: &str) {
     let mut db = db::initialize_db(db_path).await;
 
-    let key = key_from_input();
+    let key = select_key();
 
     let presses: i64 = sqlx::query("SELECT COUNT(*) as count FROM keypresses WHERE key == ?")
         .bind(u64::from(key) as i64)
@@ -72,9 +109,9 @@ async fn specific_keypresses(db_path: &str) {
     println!("{:?}: {}", key, presses);
 }
 
-fn key_from_input() -> KeybdKey {
+fn select_key() -> KeybdKey {
     let selection = Select::new(
-        "Key",
+        "Key >",
         vec![
             "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q",
             "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "0", ")", "1", "!", "2", "@", "3", "#",
