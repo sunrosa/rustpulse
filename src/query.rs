@@ -1,8 +1,8 @@
 use std::fmt::Display;
 
 use chrono::{NaiveDate, NaiveDateTime, Utc};
-use inputbot::KeybdKey;
-use inquire::{DateSelect, Select};
+use inputbot::{from_keybd_key, KeybdKey};
+use inquire::{validator::Validation, DateSelect, Select, Text};
 use sqlx::Row;
 
 use crate::db;
@@ -28,6 +28,7 @@ pub async fn query(db_path: &str) {
             "Each keypresses",
             "Each keypresses sorted",
             "Specific keypresses",
+            "Latest keypresses",
         ],
     )
     .prompt()
@@ -38,6 +39,7 @@ pub async fn query(db_path: &str) {
         "Each keypresses" => println!("{}", each_keypresses(db_path, false).await),
         "Each keypresses sorted" => println!("{}", each_keypresses(db_path, true).await),
         "Specific keypresses" => specific_keypresses(db_path).await,
+        "Latest keypresses" => latest_keypresses(db_path).await,
         _ => unreachable!(),
     }
 }
@@ -109,6 +111,60 @@ async fn specific_keypresses(db_path: &str) {
         .get(0);
 
     println!("{:?}: {}", key, presses);
+}
+
+async fn latest_keypresses(db_path: &str) {
+    let mut db = db::initialize_db(db_path).await;
+
+    let amount = Text::new("Amount to fetch >")
+        .with_validator(|input: &str| {
+            if input.parse::<i64>().is_ok() {
+                Ok(Validation::Valid)
+            } else {
+                Ok(Validation::Invalid("Could not parse input as i64.".into()))
+            }
+        })
+        .prompt()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
+
+    let rows: Vec<i64> = sqlx::query("SELECT key FROM keypresses ORDER BY id DESC limit ?")
+        .bind(amount)
+        .fetch_all(&mut db)
+        .await
+        .unwrap()
+        .iter()
+        .map(|x| x.get(0))
+        .collect();
+
+    let mut output = String::new();
+    for row in rows.into_iter().rev() {
+        let key = KeybdKey::from(row as u64);
+
+        if from_keybd_key(key) != None {
+            output.push(from_keybd_key(key).unwrap());
+        } else if key == KeybdKey::BackspaceKey {
+            output.pop();
+        } else {
+            let extra = match key {
+                KeybdKey::SpaceKey => Some(' '),
+                KeybdKey::LShiftKey | KeybdKey::RShiftKey => Some('S'),
+                KeybdKey::LControlKey | KeybdKey::RControlKey => Some('C'),
+                KeybdKey::LAltKey | KeybdKey::RAltKey => Some('A'),
+                KeybdKey::LSuper | KeybdKey::RSuper => Some('U'),
+                KeybdKey::TabKey => Some('T'),
+                KeybdKey::EscapeKey => Some('E'),
+                _ => None,
+            };
+
+            if extra.is_some() {
+                output.push(extra.unwrap());
+            }
+        }
+    }
+
+    println!("{}", output);
 }
 
 fn select_key() -> KeybdKey {
