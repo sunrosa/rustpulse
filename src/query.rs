@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
+use chrono::{NaiveDate, NaiveDateTime, Utc};
 use inputbot::KeybdKey;
-use inquire::Select;
+use inquire::{DateSelect, Select};
 use sqlx::Row;
 
 use crate::db;
@@ -21,8 +22,8 @@ pub async fn query(db_path: &str) {
 
     match selection {
         "All keypresses" => total_keypresses(db_path).await,
-        "Each keypresses" => each_keypresses(db_path).await,
-        "Each keypresses sorted" => each_keypresses_sorted(db_path).await,
+        "Each keypresses" => each_keypresses(db_path, false).await,
+        "Each keypresses sorted" => each_keypresses(db_path, true).await,
         "Specific keypresses" => specific_keypresses(db_path).await,
         _ => unreachable!(),
     }
@@ -43,30 +44,10 @@ async fn total_keypresses(db_path: &str) {
     );
 }
 
-async fn each_keypresses(db_path: &str) {
+async fn each_keypresses(db_path: &str, sort: bool) {
     let mut db = db::initialize_db(db_path).await;
 
-    let mut output = String::new();
-    for i in 0x08..0xBB {
-        if let KeybdKey::OtherKey(_) = KeybdKey::from(i) {
-            continue;
-        }
-
-        let presses: i64 = sqlx::query("SELECT COUNT(*) as count FROM keypresses WHERE key == ?")
-            .bind(i as i64)
-            .fetch_one(&mut db)
-            .await
-            .unwrap()
-            .get(0);
-
-        output += &format!("{:?}: {}\n", KeybdKey::from(i), presses);
-    }
-
-    println!("{output}");
-}
-
-async fn each_keypresses_sorted(db_path: &str) {
-    let mut db = db::initialize_db(db_path).await;
+    let filters = select_filters();
 
     let mut keys: Vec<(KeybdKey, i64)> = Vec::new();
     for i in 0x08..0xBB {
@@ -74,17 +55,34 @@ async fn each_keypresses_sorted(db_path: &str) {
             continue;
         }
 
-        let presses: i64 = sqlx::query("SELECT COUNT(*) as count FROM keypresses WHERE key == ?")
+        let row = sqlx::query("SELECT COUNT(*), timestamp FROM keypresses WHERE key == ?")
             .bind(i as i64)
             .fetch_one(&mut db)
             .await
-            .unwrap()
-            .get(0);
+            .unwrap();
+
+        let (presses, timestamp): (i64, i64) = (row.get(0), row.get(1));
+
+        if filters.start_date.is_some()
+            && NaiveDate::from(NaiveDateTime::from_timestamp_opt(timestamp, 0).unwrap())
+                < filters.start_date.unwrap()
+        {
+            continue;
+        }
+
+        if filters.end_date.is_some()
+            && NaiveDate::from(NaiveDateTime::from_timestamp_opt(timestamp, 0).unwrap())
+                > filters.end_date.unwrap()
+        {
+            continue;
+        }
 
         keys.push((KeybdKey::from(i), presses));
     }
 
-    keys.sort_by(|a, b| b.1.cmp(&a.1));
+    if sort {
+        keys.sort_by(|a, b| b.1.cmp(&a.1));
+    }
 
     let mut output = String::new();
     for key in keys {
@@ -162,4 +160,37 @@ fn select_key() -> KeybdKey {
     };
 
     key
+}
+
+struct Filters {
+    start_date: Option<chrono::NaiveDate>,
+    end_date: Option<chrono::NaiveDate>,
+}
+
+impl Filters {
+    fn new() -> Filters {
+        Filters {
+            start_date: None,
+            end_date: None,
+        }
+    }
+}
+
+fn select_filters() -> Filters {
+    let mut filters = Filters::new();
+    loop {
+        let selection = Select::new("Filters >", vec!["Done", "Start date", "End date"])
+            .prompt()
+            .unwrap();
+        match selection {
+            "Done" => break,
+            "Start date" => {
+                filters.start_date = Some(DateSelect::new("Start date >").prompt().unwrap());
+            }
+            "End date" => filters.end_date = Some(DateSelect::new("End date >").prompt().unwrap()),
+            _ => unreachable!(),
+        }
+    }
+
+    filters
 }
