@@ -3,6 +3,7 @@ mod stats;
 use std::{sync::Arc, time::Duration};
 
 use inputbot::{handle_input_events, KeybdKey};
+use log::{debug, info, trace};
 use sqlx::{
     migrate::MigrateDatabase, Connection, QueryBuilder, Sqlite, SqliteConnection, SqlitePool,
 };
@@ -10,6 +11,7 @@ use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
+    initialize_log();
     register_bindings();
 
     tokio::task::spawn(async {
@@ -18,37 +20,41 @@ async fn main() {
         let exit_after_commit = Arc::new(Mutex::new(false));
 
         {
-            let exit_after_commit_thread = exit_after_commit.clone();
+            let exit_after_commit = exit_after_commit.clone();
             tokio::task::spawn(async move {
+                trace!("Registering ctrl-c handler...");
                 tokio::signal::ctrl_c()
                     .await
                     .expect("Error registering ctrl-c handler.");
 
-                println!("Exiting after next database commit...");
-                *exit_after_commit_thread.lock().await = true;
+                info!("Exiting after next database commit...");
+                *exit_after_commit.lock().await = true;
             });
         }
 
         if !Sqlite::database_exists(db_path).await.unwrap_or(false) {
-            println!("Creating database at {db_path}...");
+            info!("Creating database at {db_path}...");
             match Sqlite::create_database(db_path).await {
                 Ok(_) => println!("Success creating database."),
                 Err(error) => panic!("Error creating database: {}", error),
             }
         } else {
-            println!("Database already exists at {db_path}.");
+            debug!("Database exists at {db_path}.");
         }
 
+        debug!("Connecting to database...");
         let mut db = SqliteConnection::connect(db_path).await.unwrap();
+        debug!("Connected to database.");
+
         sqlx::query("CREATE TABLE IF NOT EXISTS keypresses (id INTEGER PRIMARY KEY NOT NULL, timestamp INTEGER NOT NULL, key INTEGER NOT NULL);").execute(&mut db).await.unwrap();
 
         loop {
+            trace!("Top of commit loop.");
             tokio::time::sleep(Duration::from_secs(20)).await;
 
             let keypresses = stats::get_keypresses().lock().await;
             if keypresses.len() != 0 {
-                println!("Committing to database...");
-
+                trace!("Building database query...");
                 let mut query_builder: QueryBuilder<Sqlite> =
                     QueryBuilder::new("INSERT INTO keypresses (timestamp, key) ");
 
@@ -57,28 +63,56 @@ async fn main() {
                         .push_bind(u64::from(key.1) as i64);
                 });
 
+                debug!("Committing to database...");
                 query_builder.build().execute(&mut db).await.unwrap();
 
-                println!("Committed to database.");
-
+                // Keypresses MUST be dropped in order to prevent an eternal mutex lock in reset_keypresses().
                 drop(keypresses);
                 stats::reset_keypresses().await;
             }
 
             if *exit_after_commit.lock().await {
+                info!("Exiting...");
                 std::process::exit(0);
             }
         }
     });
 
+    info!("Keyboard event handler to come alive...");
     handle_input_events();
 }
 
 fn register_bindings() {
+    debug!("Registering all bindings...");
     KeybdKey::bind_all(keypress_handler);
 }
 
 fn keypress_handler(key: KeybdKey) {
     // TODO: Make this go through an MPSC channel into another thread so as not to block.
     stats::add_keypress_blocking(key);
+}
+
+fn initialize_log() {
+    fern::Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "[{} {} {}] {}",
+                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.9f"),
+                record.level(),
+                record.target(),
+                message
+            ))
+        })
+        .level(log::LevelFilter::Warn)
+        .level_for(env!("CARGO_PKG_NAME"), log::LevelFilter::Trace)
+        .chain(std::io::stdout())
+        .chain(fern::log_file("output.log").unwrap())
+        .apply()
+        .unwrap();
+
+    info!(
+        "STARTED {} {}",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION"),
+    );
 }

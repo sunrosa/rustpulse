@@ -20,7 +20,5 @@ pub fn get_keypresses<'a>() -> &'a Mutex<Vec<(DateTime<Utc>, KeybdKey)>> {
 }
 
 pub async fn reset_keypresses() {
-    println!("Resetting keypresses...");
     *PRESSES.lock().await = Vec::new();
-    println!("Reset keypresses.");
 }
