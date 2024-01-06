@@ -1,7 +1,6 @@
-mod stats;
-
 use std::{sync::Arc, time::Duration};
 
+use chrono::{DateTime, Utc};
 use inputbot::{handle_input_events, KeybdKey};
 use log::{debug, info, trace};
 use sqlx::{
@@ -12,84 +11,85 @@ use tokio::sync::Mutex;
 #[tokio::main]
 async fn main() {
     initialize_log();
-    register_bindings();
 
-    tokio::task::spawn(async {
-        let db_path = "events.db";
+    let keypress_queue: Arc<Mutex<Vec<(DateTime<Utc>, KeybdKey)>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    register_bindings(keypress_queue.clone());
 
-        let exit_after_commit = Arc::new(Mutex::new(false));
+    {
+        let keypress_queue = keypress_queue.clone();
+        tokio::task::spawn(async move {
+            let db_path = "events.db";
 
-        {
-            let exit_after_commit = exit_after_commit.clone();
-            tokio::task::spawn(async move {
-                trace!("Registering ctrl-c handler...");
-                tokio::signal::ctrl_c()
-                    .await
-                    .expect("Error registering ctrl-c handler.");
+            let exit_after_commit = Arc::new(Mutex::new(false));
 
-                info!("Exiting after next database commit...");
-                *exit_after_commit.lock().await = true;
-            });
-        }
+            {
+                let exit_after_commit = exit_after_commit.clone();
+                tokio::task::spawn(async move {
+                    trace!("Registering ctrl-c handler...");
+                    tokio::signal::ctrl_c()
+                        .await
+                        .expect("Error registering ctrl-c handler.");
 
-        if !Sqlite::database_exists(db_path).await.unwrap_or(false) {
-            info!("Creating database at {db_path}...");
-            match Sqlite::create_database(db_path).await {
-                Ok(_) => println!("Success creating database."),
-                Err(error) => panic!("Error creating database: {}", error),
-            }
-        } else {
-            debug!("Database exists at {db_path}.");
-        }
-
-        debug!("Connecting to database...");
-        let mut db = SqliteConnection::connect(db_path).await.unwrap();
-        debug!("Connected to database.");
-
-        sqlx::query("CREATE TABLE IF NOT EXISTS keypresses (id INTEGER PRIMARY KEY NOT NULL, timestamp INTEGER NOT NULL, key INTEGER NOT NULL);").execute(&mut db).await.unwrap();
-
-        loop {
-            trace!("Top of commit loop.");
-            tokio::time::sleep(Duration::from_secs(20)).await;
-
-            let keypresses = stats::get_keypresses().lock().await;
-            if keypresses.len() != 0 {
-                trace!("Building database query...");
-                let mut query_builder: QueryBuilder<Sqlite> =
-                    QueryBuilder::new("INSERT INTO keypresses (timestamp, key) ");
-
-                query_builder.push_values(keypresses.iter(), |mut b, key| {
-                    b.push_bind(key.0.timestamp())
-                        .push_bind(u64::from(key.1) as i64);
+                    info!("Exiting after next database commit...");
+                    *exit_after_commit.lock().await = true;
                 });
-
-                debug!("Committing to database...");
-                query_builder.build().execute(&mut db).await.unwrap();
-
-                // Keypresses MUST be dropped in order to prevent an eternal mutex lock in reset_keypresses().
-                drop(keypresses);
-                stats::reset_keypresses().await;
             }
 
-            if *exit_after_commit.lock().await {
-                info!("Exiting...");
-                std::process::exit(0);
+            if !Sqlite::database_exists(db_path).await.unwrap_or(false) {
+                info!("Creating database at {db_path}...");
+                match Sqlite::create_database(db_path).await {
+                    Ok(_) => println!("Success creating database."),
+                    Err(error) => panic!("Error creating database: {}", error),
+                }
+            } else {
+                debug!("Database exists at {db_path}.");
             }
-        }
-    });
+
+            debug!("Connecting to database...");
+            let mut db = SqliteConnection::connect(db_path).await.unwrap();
+            debug!("Connected to database.");
+
+            sqlx::query("CREATE TABLE IF NOT EXISTS keypresses (id INTEGER PRIMARY KEY NOT NULL, timestamp INTEGER NOT NULL, key INTEGER NOT NULL);").execute(&mut db).await.unwrap();
+
+            loop {
+                trace!("Top of commit loop.");
+                tokio::time::sleep(Duration::from_secs(20)).await;
+
+                let mut keypress_lock = keypress_queue.lock().await;
+                let keypresses = keypress_lock.drain(..).into_iter();
+
+                if keypresses.len() != 0 {
+                    trace!("Building database query...");
+                    let mut query_builder: QueryBuilder<Sqlite> =
+                        QueryBuilder::new("INSERT INTO keypresses (timestamp, key) ");
+
+                    query_builder.push_values(keypresses, |mut b, key| {
+                        b.push_bind(key.0.timestamp())
+                            .push_bind(u64::from(key.1) as i64);
+                    });
+
+                    debug!("Committing to database...");
+                    query_builder.build().execute(&mut db).await.unwrap();
+                }
+
+                if *exit_after_commit.lock().await {
+                    info!("Exiting...");
+                    std::process::exit(0);
+                }
+            }
+        });
+    }
 
     info!("Keyboard event handler to come alive...");
     handle_input_events();
 }
 
-fn register_bindings() {
+fn register_bindings(keypress_queue: Arc<Mutex<Vec<(DateTime<Utc>, KeybdKey)>>>) {
     debug!("Registering all bindings...");
-    KeybdKey::bind_all(keypress_handler);
-}
-
-fn keypress_handler(key: KeybdKey) {
-    // TODO: Make this go through an MPSC channel into another thread so as not to block.
-    stats::add_keypress_blocking(key);
+    KeybdKey::bind_all(move |key| {
+        keypress_queue.blocking_lock().push((Utc::now(), key));
+    });
 }
 
 fn initialize_log() {
