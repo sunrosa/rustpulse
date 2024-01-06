@@ -2,10 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 use inputbot::{handle_input_events, KeybdKey};
-use log::{debug, info, trace};
-use sqlx::{
-    migrate::MigrateDatabase, Connection, QueryBuilder, Sqlite, SqliteConnection, SqlitePool,
-};
+use log::{debug, error, info, trace};
+use sqlx::{migrate::MigrateDatabase, Connection, QueryBuilder, Sqlite, SqliteConnection};
 use tokio::sync::Mutex;
 
 #[tokio::main]
@@ -39,8 +37,8 @@ async fn main() {
             if !Sqlite::database_exists(db_path).await.unwrap_or(false) {
                 info!("Creating database at {db_path}...");
                 match Sqlite::create_database(db_path).await {
-                    Ok(_) => println!("Success creating database."),
-                    Err(error) => panic!("Error creating database: {}", error),
+                    Ok(_) => info!("Success creating database."),
+                    Err(error) => error_panic(format!("Error creating database: {}", error)),
                 }
             } else {
                 debug!("Database exists at {db_path}.");
@@ -115,4 +113,9 @@ fn initialize_log() {
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION"),
     );
+}
+
+fn error_panic(output: String) {
+    error!("{output}");
+    panic!("{output}");
 }
