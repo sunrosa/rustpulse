@@ -9,16 +9,15 @@ use tokio::sync::Mutex;
 
 use crate::db;
 
-pub async fn log_keys() {
+pub async fn log_keys(db_path: &str) {
     let (sender, receiver) = crossbeam::channel::bounded::<(DateTime<Utc>, KeybdKey)>(10000);
     register_bindings(sender);
 
+    let exit_after_commit = ctrl_c_handler().await;
+    let mut db = db::initialize_db(db_path).await;
+
     {
         tokio::task::spawn(async move {
-            let exit_after_commit = ctrl_c_handler().await;
-
-            let mut db = db::initialize_db("events.db").await;
-
             loop {
                 trace!("Top of commit loop.");
                 tokio::time::sleep(Duration::from_secs(20)).await;

@@ -9,13 +9,15 @@ use log::info;
 async fn main() {
     initialize_log();
 
+    let db_path = "events.db";
+
     let selection = Select::new("Process >", vec!["Keylogger", "Query"])
         .prompt()
         .unwrap();
 
     match selection {
-        "Keylogger" => keylogger::log_keys().await,
-        "Query" => query::query(),
+        "Keylogger" => keylogger::log_keys(db_path).await,
+        "Query" => query::query(db_path).await,
         _ => unreachable!(),
     }
 }
@@ -39,7 +41,6 @@ fn initialize_log() {
         })
         .level(log::LevelFilter::Warn)
         .level_for(env!("CARGO_PKG_NAME"), crate_log_level)
-        .chain(std::io::stdout())
         .chain(fern::log_file("output.log").unwrap())
         .apply()
         .unwrap();
