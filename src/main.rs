@@ -1,12 +1,23 @@
 mod db;
 mod keylogger;
+mod query;
 
+use inquire::Select;
 use log::info;
 
 #[tokio::main]
 async fn main() {
     initialize_log();
-    keylogger::log_keys().await;
+
+    let selection = Select::new("Process >", vec!["Keylogger", "Query"])
+        .prompt()
+        .unwrap();
+
+    match selection {
+        "Keylogger" => keylogger::log_keys().await,
+        "Query" => query::query(),
+        _ => unreachable!(),
+    }
 }
 
 fn initialize_log() {
