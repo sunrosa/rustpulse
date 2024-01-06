@@ -67,6 +67,7 @@ async fn ctrl_c_handler() -> Arc<Mutex<bool>> {
                 .expect("Error registering ctrl-c handler.");
 
             info!("Exiting after next database commit...");
+            println!("Exiting after next database commit...");
             *exit.lock().await = true;
         });
     }
