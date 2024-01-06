@@ -63,6 +63,7 @@ async fn each_keypresses(db_path: &str, sort: bool) {
 
         let (presses, timestamp): (i64, i64) = (row.get(0), row.get(1));
 
+        // TODO: Put these filters into the database query!
         if filters.start_date.is_some()
             && NaiveDate::from(NaiveDateTime::from_timestamp_opt(timestamp, 0).unwrap())
                 < filters.start_date.unwrap()
