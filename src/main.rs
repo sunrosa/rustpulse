@@ -2,11 +2,10 @@ mod db;
 mod keylogger;
 mod query;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use inquire::Select;
 use log::info;
-use tokio::sync::Mutex;
+use tokio::{join, sync::Mutex, task::JoinHandle};
 
 #[tokio::main]
 async fn main() {
@@ -15,14 +14,25 @@ async fn main() {
     let db_path = "events.db";
     let db = Arc::new(Mutex::new(db::initialize_db(db_path).await));
 
+    let keylogger_handle: JoinHandle<()>;
     {
         let db = db.clone();
-        tokio::task::spawn(async move { keylogger::log_keys(db).await });
+        keylogger_handle = tokio::task::spawn(async move { keylogger::log_keys(db).await });
     }
 
-    loop {
-        query::query(db.clone()).await;
-    }
+    // let query_handle: JoinHandle<()>;
+    // {
+    //     let db = db.clone();
+    //     query_handle = tokio::task::spawn(async move {
+    //         loop {
+    //             query::query(db.clone()).await;
+    //         }
+    //     });
+    // }
+
+    let handle_results = join!(keylogger_handle /* , query_handle*/);
+    handle_results.0.unwrap();
+    // handle_results.1.unwrap();
 }
 
 fn initialize_log() {

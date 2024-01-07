@@ -22,27 +22,27 @@ impl Display for Keypresses {
 }
 
 pub async fn query(db: Arc<Mutex<SqliteConnection>>) {
-    let selection = Select::new(
-        "Query >",
-        vec![
-            "All keypresses",
-            "Each keypresses",
-            "Each keypresses sorted",
-            "Specific keypresses",
-            "Latest keypresses",
-        ],
-    )
-    .prompt()
-    .unwrap();
+    // let selection = Select::new(
+    //     "Query >",
+    //     vec![
+    //         "All keypresses",
+    //         "Each keypresses",
+    //         "Each keypresses sorted",
+    //         "Specific keypresses",
+    //         "Latest keypresses",
+    //     ],
+    // )
+    // .prompt()
+    // .unwrap();
 
-    match selection {
-        "All keypresses" => println!("{} keys have been pressed.", total_keypresses(db).await),
-        "Each keypresses" => println!("{}", each_keypresses(db, false).await),
-        "Each keypresses sorted" => println!("{}", each_keypresses(db, true).await),
-        "Specific keypresses" => specific_keypresses(db).await,
-        "Latest keypresses" => latest_keypresses(db).await,
-        _ => unreachable!(),
-    }
+    // match selection {
+    //     "All keypresses" => println!("{} keys have been pressed.", total_keypresses(db).await),
+    //     "Each keypresses" => println!("{}", each_keypresses(db, false).await),
+    //     "Each keypresses sorted" => println!("{}", each_keypresses(db, true).await),
+    //     "Specific keypresses" => specific_keypresses(db).await,
+    //     "Latest keypresses" => latest_keypresses(db).await,
+    //     _ => unreachable!(),
+    // }
 }
 
 async fn total_keypresses(db: Arc<Mutex<SqliteConnection>>) -> i64 {
