@@ -2,23 +2,26 @@ mod db;
 mod keylogger;
 mod query;
 
+use std::sync::Arc;
+
 use inquire::Select;
 use log::info;
+use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
     initialize_log();
 
     let db_path = "events.db";
+    let db = Arc::new(Mutex::new(db::initialize_db(db_path).await));
 
-    let selection = Select::new("Process >", vec!["Keylogger", "Query"])
-        .prompt()
-        .unwrap();
+    {
+        let db = db.clone();
+        tokio::task::spawn(async move { keylogger::log_keys(db).await });
+    }
 
-    match selection {
-        "Keylogger" => keylogger::log_keys(db_path).await,
-        "Query" => query::query(db_path).await,
-        _ => unreachable!(),
+    loop {
+        query::query(db.clone()).await;
     }
 }
 

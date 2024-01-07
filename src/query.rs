@@ -1,9 +1,10 @@
-use std::fmt::Display;
+use std::{fmt::Display, sync::Arc};
 
 use chrono::{NaiveDate, NaiveDateTime, Utc};
 use inputbot::{from_keybd_key, KeybdKey};
 use inquire::{validator::Validation, DateSelect, Select, Text};
-use sqlx::Row;
+use sqlx::{Row, Sqlite, SqliteConnection};
+use tokio::sync::Mutex;
 
 use crate::db;
 
@@ -20,7 +21,7 @@ impl Display for Keypresses {
     }
 }
 
-pub async fn query(db_path: &str) {
+pub async fn query(db: Arc<Mutex<SqliteConnection>>) {
     let selection = Select::new(
         "Query >",
         vec![
@@ -35,17 +36,17 @@ pub async fn query(db_path: &str) {
     .unwrap();
 
     match selection {
-        "All keypresses" => println!("{}", total_keypresses(db_path).await),
-        "Each keypresses" => println!("{}", each_keypresses(db_path, false).await),
-        "Each keypresses sorted" => println!("{}", each_keypresses(db_path, true).await),
-        "Specific keypresses" => specific_keypresses(db_path).await,
-        "Latest keypresses" => latest_keypresses(db_path).await,
+        "All keypresses" => println!("{} keys have been pressed.", total_keypresses(db).await),
+        "Each keypresses" => println!("{}", each_keypresses(db, false).await),
+        "Each keypresses sorted" => println!("{}", each_keypresses(db, true).await),
+        "Specific keypresses" => specific_keypresses(db).await,
+        "Latest keypresses" => latest_keypresses(db).await,
         _ => unreachable!(),
     }
 }
 
-async fn total_keypresses(db_path: &str) -> i64 {
-    let keypresses = each_keypresses(db_path, false).await;
+async fn total_keypresses(db: Arc<Mutex<SqliteConnection>>) -> i64 {
+    let keypresses = each_keypresses(db, false).await;
     let mut count = 0;
     for key in keypresses.0 {
         count += key.1;
@@ -54,9 +55,7 @@ async fn total_keypresses(db_path: &str) -> i64 {
     count
 }
 
-async fn each_keypresses(db_path: &str, sort: bool) -> Keypresses {
-    let mut db = db::initialize_db(db_path).await;
-
+async fn each_keypresses(db: Arc<Mutex<SqliteConnection>>, sort: bool) -> Keypresses {
     let filters = select_filters();
 
     let mut keys: Vec<(KeybdKey, i64)> = Vec::new();
@@ -67,7 +66,7 @@ async fn each_keypresses(db_path: &str, sort: bool) -> Keypresses {
 
         let row = sqlx::query("SELECT COUNT(*), timestamp FROM keypresses WHERE key == ?;")
             .bind(i as i64)
-            .fetch_one(&mut db)
+            .fetch_one(&mut *db.lock().await)
             .await
             .unwrap();
 
@@ -98,14 +97,12 @@ async fn each_keypresses(db_path: &str, sort: bool) -> Keypresses {
     Keypresses(keys)
 }
 
-async fn specific_keypresses(db_path: &str) {
-    let mut db = db::initialize_db(db_path).await;
-
+async fn specific_keypresses(db: Arc<Mutex<SqliteConnection>>) {
     let key = select_key();
 
     let presses: i64 = sqlx::query("SELECT COUNT(*) as count FROM keypresses WHERE key == ?")
         .bind(u64::from(key) as i64)
-        .fetch_one(&mut db)
+        .fetch_one(&mut *db.lock().await)
         .await
         .unwrap()
         .get(0);
@@ -113,9 +110,7 @@ async fn specific_keypresses(db_path: &str) {
     println!("{:?}: {}", key, presses);
 }
 
-async fn latest_keypresses(db_path: &str) {
-    let mut db = db::initialize_db(db_path).await;
-
+async fn latest_keypresses(db: Arc<Mutex<SqliteConnection>>) {
     let amount = Text::new("Amount to fetch >")
         .with_validator(|input: &str| {
             if input.parse::<i64>().is_ok() {
@@ -131,7 +126,7 @@ async fn latest_keypresses(db_path: &str) {
 
     let rows: Vec<i64> = sqlx::query("SELECT key FROM keypresses ORDER BY id DESC limit ?")
         .bind(amount)
-        .fetch_all(&mut db)
+        .fetch_all(&mut *db.lock().await)
         .await
         .unwrap()
         .iter()

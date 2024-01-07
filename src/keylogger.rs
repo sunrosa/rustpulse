@@ -9,12 +9,11 @@ use tokio::sync::Mutex;
 
 use crate::db;
 
-pub async fn log_keys(db_path: &str) {
+pub async fn log_keys(db: Arc<Mutex<SqliteConnection>>) {
     let (sender, receiver) = crossbeam::channel::bounded::<(DateTime<Utc>, KeybdKey)>(10000);
     register_bindings(sender);
 
     let exit_after_commit = ctrl_c_handler().await;
-    let mut db = db::initialize_db(db_path).await;
 
     {
         tokio::task::spawn(async move {
@@ -31,7 +30,7 @@ pub async fn log_keys(db_path: &str) {
                 let keypresses: Vec<_> = receiver.try_iter().collect();
 
                 if keypresses.len() != 0 {
-                    commit_keys_to_db(&mut db, keypresses).await;
+                    commit_keys_to_db(db.clone(), keypresses).await;
                 }
 
                 if *exit_after_commit.lock().await {
@@ -75,7 +74,10 @@ async fn ctrl_c_handler() -> Arc<Mutex<bool>> {
     exit
 }
 
-async fn commit_keys_to_db(db: &mut SqliteConnection, keypresses: Vec<(DateTime<Utc>, KeybdKey)>) {
+async fn commit_keys_to_db(
+    db: Arc<Mutex<SqliteConnection>>,
+    keypresses: Vec<(DateTime<Utc>, KeybdKey)>,
+) {
     trace!("Building database query...");
     let mut query_builder: QueryBuilder<Sqlite> =
         QueryBuilder::new("INSERT INTO keypresses (timestamp, key) ");
@@ -86,5 +88,9 @@ async fn commit_keys_to_db(db: &mut SqliteConnection, keypresses: Vec<(DateTime<
     });
 
     debug!("Committing to database...");
-    query_builder.build().execute(db).await.unwrap();
+    query_builder
+        .build()
+        .execute(&mut *db.lock().await)
+        .await
+        .unwrap();
 }
